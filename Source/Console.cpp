@@ -18,6 +18,7 @@ typedef float vec4_t[4];
 static vec4_t colorWhite = { 1.0f, 1.0f, 1.0f, 1.0f };
 static vec4_t colorYellow = { 1.0f, 1.0f, 0.0f, 1.0f };
 static vec4_t colorCyan = { 0.0f, 1.0f, 1.0f, 1.0f };
+static vec4_t colorGreen = { 0.0f, 1.0f, 0.0f, 1.0f };
 
 static Function<void*(int, const char*)> DB_FindXAssetHeader;
 static Function<void*()> ScrPlace_GetActivePlacement;
@@ -39,6 +40,8 @@ struct dvar_t
     // todo
 };
 
+static Function<dvar_t*(const char*)> Dvar_FindVar;
+
 auto dvarCount =    reinterpret_cast<std::size_t*>(0x14B304A30);
 auto sortedDvars =  reinterpret_cast<dvar_t**>(0x14B304A50);
 
@@ -57,7 +60,7 @@ void Console_DrawInputBox()
     UI_DrawText(ScrPlace_GetActivePlacement(), console_input.data(), console_input.size(), font, 10.0 + 55.0, 15.6, 1, 1, 0.11, colorWhite, 0);
 }
 
-std::vector < std::string > Console_FindCommands(const std::string& input)
+std::vector < std::string > Console_FindCommands(const std::string& input, const std::size_t max = 20)
 {
     std::vector < std::string > foundSuggestions;
 
@@ -66,7 +69,7 @@ std::vector < std::string > Console_FindCommands(const std::string& input)
     return foundSuggestions;
 }
 
-std::vector < std::string > Console_FindDvars(const std::string& input)
+std::vector < std::string > Console_FindDvars(const std::string& input, const std::size_t max = 20)
 {
     std::vector < std::string > foundSuggestions;
 
@@ -81,7 +84,7 @@ std::vector < std::string > Console_FindDvars(const std::string& input)
                 foundSuggestions.push_back(sortedDvars[i]->name);
 
                 // if suggestions list is too big, break it.
-                if (foundSuggestions.size() >= 20)
+                if (foundSuggestions.size() >= max)
                 {
                     break;
                 }
@@ -130,6 +133,25 @@ void Console_DrawSuggestions()
     }
 }
 
+void Console_DrawInfo(const std::string& input)
+{
+    auto font = R_RegisterFont("fonts/consoleFont");
+    auto console = Material_RegisterHandle("console");
+    auto placement = ScrPlace_GetActivePlacement();
+    auto dvar = Dvar_FindVar(&input[0]);
+
+    if (dvar)
+    {
+        // draw suggestions
+        UI_DrawHandlePic(placement, 5.0 + 40.0, 25.0, 590.0, 5.0 + (10.0 * 3), 4, 0, colorWhite, console);
+        UI_DrawText(placement, dvar->name, strlen(dvar->name), font, 10.0 + 55.0, 15.6 + 20.0, 1, 1, 0.1, colorYellow, 0);
+        UI_DrawText(placement, "Dvar value here, default value here", 36, font, 10.0 + 55.0, 15.6 + 30.0, 1, 1, 0.1, colorYellow, 0);
+        UI_DrawText(placement, "Value is any x between y and z", 31, font, 10.0 + 55.0, 15.6 + 40.0, 1, 1, 0.1, colorGreen, 0);
+
+        // UI_DrawText(placement, &foundSuggestions[i].first[0], foundSuggestions[i].first.size(), font, 10.0 + 55.0, 15.6 + 20.0 + (10.0 * i), 1, 1, 0.1, foundSuggestions[i].second == 1 ? colorCyan : colorYellow, 0);
+    }
+}
+
 void Console_ToggleConsole()
 {
     if (!Key_IsCatcherActive(0, 1))
@@ -158,7 +180,15 @@ extern "C"
 
             if (!console_input.empty())
             {
-                Console_DrawSuggestions();
+                std::size_t index;
+                if ((index = console_input.find_first_of(' ')) != std::string::npos && index > 0)
+                {
+                    Console_DrawInfo(console_input.substr(0, index));
+                }
+                else
+                {
+                    Console_DrawSuggestions();
+                }
             }
         }
     }
@@ -172,6 +202,7 @@ void CL_KeyEventHook(std::uint64_t a1, std::uint32_t key, std::uint32_t down, st
 
     if (down && (key == '~' || key == '`'))
     {
+        console_input.clear();
         Console_ToggleConsole();
     }
 
@@ -198,6 +229,23 @@ void CL_KeyEventHook(std::uint64_t a1, std::uint32_t key, std::uint32_t down, st
             }
         }
 
+        // tab logic
+        if (!down && key == 9)
+        {
+            auto dvars = Console_FindDvars(console_input, 1);
+            auto cmds = Console_FindCommands(console_input, 1);
+
+            // commands are prioritized in the suggestions popup over dvars, so check commands first.
+            if (cmds.size())
+            {
+                console_input = cmds[0] + ' ';
+            }
+            else if (dvars.size())
+            {
+                console_input = dvars[0] + ' ';
+            }
+        }
+
         // 
         if (down)
         {
@@ -218,7 +266,6 @@ void CL_KeyEventHook(std::uint64_t a1, std::uint32_t key, std::uint32_t down, st
                 console_input += Key_IsDown(0, 160) ? key - 0x10 : key;
             }
         }
-        
     }
 
     return CL_KeyEvent(a1, key, down, a4);
@@ -283,6 +330,10 @@ void Console_InstallHooks()
     Key_IsDown = Findpattern(
         Pattern::Textsegment,
         "48 63 C2 83 F8 FF 75 03 33 C0 C3 48 63 D1 48 8D 0C 40 48 69 D2 ? ? ? ? 48 8D 04 8A 48 8D 0D ? ? ? ? 8B 04 08 C3"
+    );
+    Dvar_FindVar = Findpattern(
+        Pattern::Textsegment,
+        "48 89 5C 24 ? 57 48 83 EC 20 48 8B F9 F0 FF 05 ? ? ? ? 8B 05 ? ? ? ? 85 C0 74 13 66 90 33 C9 E8 ? ? ? ? 8B 05 ? ? ? ? 85 C0 75 EF"
     );
 
     // Hooks
