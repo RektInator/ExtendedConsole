@@ -1,3 +1,11 @@
+/*
+    Initial author: RektInator
+    Started: 05-03-2018
+    License: MIT
+    Notes:
+        A patch that provides a In-Game console in various installments of the Call of Duty franchise.
+*/
+
 #include "StdInclude.hpp"
 #include "Function.hpp"
 
@@ -8,6 +16,8 @@ static Hooking::Stomphook OnFrameHook;
 
 typedef float vec4_t[4];
 static vec4_t colorWhite = { 1.0f, 1.0f, 1.0f, 1.0f };
+static vec4_t colorYellow = { 1.0f, 1.0f, 0.0f, 1.0f };
+static vec4_t colorCyan = { 0.0f, 1.0f, 1.0f, 1.0f };
 
 static Function<void*(int, const char*)> DB_FindXAssetHeader;
 static Function<void*()> ScrPlace_GetActivePlacement;
@@ -16,8 +26,21 @@ static Function<void __fastcall(void*, const char*, std::int32_t, void*, float, 
 static Function<void*(const char*)> Material_RegisterHandle;
 static Function<void*(const char*)> R_RegisterFont;
 static Function<void(int, const char*)> Cbuf_AddText;
+static Function<bool(std::uintptr_t, int)> Key_IsCatcherActive;
+static Function<void(std::uintptr_t, int)> Key_SetCatcher;
+static Function<void(std::uintptr_t, int)> Key_RemoveCatcher;
+static Function<bool(int, int)> Key_IsDown;
 
 std::string console_input = "";
+
+struct dvar_t
+{
+    const char* name;
+    // todo
+};
+
+auto dvarCount =    reinterpret_cast<std::size_t*>(0x14B304A30);
+auto sortedDvars =  reinterpret_cast<dvar_t**>(0x14B304A50);
 
 void Console_DrawInputBox()
 {
@@ -34,11 +57,89 @@ void Console_DrawInputBox()
     UI_DrawText(ScrPlace_GetActivePlacement(), console_input.data(), console_input.size(), font, 10.0 + 55.0, 15.6, 1, 1, 0.11, colorWhite, 0);
 }
 
-bool console_isActive = false;
+std::vector < std::string > Console_FindCommands(const std::string& input)
+{
+    std::vector < std::string > foundSuggestions;
+
+    // loop through commands
+
+    return foundSuggestions;
+}
+
+std::vector < std::string > Console_FindDvars(const std::string& input)
+{
+    std::vector < std::string > foundSuggestions;
+
+    // loop through dvars
+    for (auto i = 0u; i < 8192; i++)
+    {
+        if (sortedDvars[i] && sortedDvars[i]->name)
+        {
+            if (strstr(sortedDvars[i]->name, &console_input[0]))
+            {
+                // add dvar to list
+                foundSuggestions.push_back(sortedDvars[i]->name);
+
+                // if suggestions list is too big, break it.
+                if (foundSuggestions.size() >= 20)
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    return foundSuggestions;
+}
+
+void Console_DrawSuggestions()
+{
+    auto font = R_RegisterFont("fonts/consoleFont");
+    auto console = Material_RegisterHandle("console");
+    auto placement = ScrPlace_GetActivePlacement();
+
+    auto dvars = Console_FindDvars(console_input);
+    auto commands = Console_FindCommands(console_input);
+   
+    std::vector < std::pair < std::string, std::uint8_t > > foundSuggestions;
+    for (auto &command : commands)
+    {
+        foundSuggestions.push_back({ command, 1 });
+        if (foundSuggestions.size() >= 20) break;
+    }
+    for (auto &dvar : dvars)
+    {
+        foundSuggestions.push_back({ dvar, 0 });
+        if (foundSuggestions.size() >= 20) break;
+    }
+
+    if (foundSuggestions.size() >= 20)
+    {
+        foundSuggestions.push_back({ "^220+ suggestions, too many to show.", 2 });
+    }
+
+    if (foundSuggestions.size())
+    {
+        // draw suggestions
+        UI_DrawHandlePic(placement, 5.0 + 40.0, 25.0, 590.0, 5.0 + (10.0 * foundSuggestions.size()), 4, 0, colorWhite, console);
+
+        for (auto i = 0u; i < foundSuggestions.size(); i++)
+        {
+            UI_DrawText(placement, &foundSuggestions[i].first[0], foundSuggestions[i].first.size(), font, 10.0 + 55.0, 15.6 + 20.0 + (10.0 * i), 1, 1, 0.1, foundSuggestions[i].second == 1 ? colorCyan : colorYellow, 0);
+        }
+    }
+}
 
 void Console_ToggleConsole()
 {
-    console_isActive = !console_isActive;
+    if (!Key_IsCatcherActive(0, 1))
+    {
+        Key_SetCatcher(0, 1);
+    }
+    else
+    {
+        Key_RemoveCatcher(0, -2);
+    }
 }
 
 extern "C"
@@ -51,16 +152,20 @@ extern "C"
 
     void Console_OnFrame()
     {
-        if (console_isActive)
+        if (Key_IsCatcherActive(0, 1))
         {
             Console_DrawInputBox();
+
+            if (!console_input.empty())
+            {
+                Console_DrawSuggestions();
+            }
         }
     }
     void OnFrameHookStub();
-} 
+}
 
 static std::function<void(std::uint64_t a1, std::uint32_t key, std::uint32_t down, std::uint32_t a4)> CL_KeyEvent;
-
 void CL_KeyEventHook(std::uint64_t a1, std::uint32_t key, std::uint32_t down, std::uint32_t a4)
 {
     printf("key %i\n", key);
@@ -70,7 +175,7 @@ void CL_KeyEventHook(std::uint64_t a1, std::uint32_t key, std::uint32_t down, st
         Console_ToggleConsole();
     }
 
-    if (console_isActive)
+    if (Key_IsCatcherActive(0, 1))
     {
         // enter pressed
         if (!down && key == 13)
@@ -93,14 +198,43 @@ void CL_KeyEventHook(std::uint64_t a1, std::uint32_t key, std::uint32_t down, st
             }
         }
 
-        // letter keys
-        if (down && key >= 32 && key < 127)
+        // 
+        if (down)
         {
-            console_input += static_cast<char>(key);
+            if (key >= 97 && key < 126)
+            {
+                console_input += Key_IsDown(0, 160) ? key - 0x20 : key;
+            }
+            else if (key == 32)
+            {
+                console_input += key;
+            }
+            else if (key == 45)
+            {
+                console_input += Key_IsDown(0, 160) ? 95 : key;
+            }
+            else if (key >= 48 && key < 64)
+            {
+                console_input += Key_IsDown(0, 160) ? key - 0x10 : key;
+            }
         }
+        
     }
 
     return CL_KeyEvent(a1, key, down, a4);
+}
+
+extern "C"
+{
+    std::uint64_t CL_CharEventLoc;
+    std::uint64_t CL_CharEventHook_JumpBack;
+
+    void CL_CharEventHook(std::uint32_t a1, std::uint32_t key)
+    {
+        static Function<void(std::uint32_t, std::uint32_t)> CL_CharEvent(CL_CharEventLoc);
+        return CL_CharEvent(a1, key);
+    }
+    void CL_CharEventHookStub();
 }
 
 void Console_InstallHooks() 
@@ -134,10 +268,26 @@ void Console_InstallHooks()
         Pattern::Textsegment,
         "48 89 5C 24 ? 57 48 83 EC 20 8B F9 B9 ? ? ? ? 48 8B DA E8 ? ? ? ? 0F B6 03 2C 50 A8 DF 75 26 0F B6 43 01 3C 30 75 1E 0F BE F8 48 83 C3 02 83 EF 30 80 3B 20 75 0F 0F 1F 80 ? ? ? ?"
     );
+    Key_IsCatcherActive = Findpattern(
+        Pattern::Textsegment,
+        "85 15 ? ? ? ? 0F 95 C0 C3"
+    );
+    Key_SetCatcher = Findpattern(
+        Pattern::Textsegment,
+        "F6 05 ? ? ? ? ? 74 03 83 CA 01 89 15 ? ? ? ? C3"
+    );
+    Key_RemoveCatcher = Findpattern(
+        Pattern::Textsegment,
+        "21 15 ? ? ? ? C3"
+    );
+    Key_IsDown = Findpattern(
+        Pattern::Textsegment,
+        "48 63 C2 83 F8 FF 75 03 33 C0 C3 48 63 D1 48 8D 0C 40 48 69 D2 ? ? ? ? 48 8D 04 8A 48 8D 0D ? ? ? ? 8B 04 08 C3"
+    );
 
     // Hooks
     OnFrameHook.Installhook(
-        reinterpret_cast<void*>(0x140213B2C), 
+        reinterpret_cast<void*>(0x140213B2C),           // CHANGE TO PATTERN
         reinterpret_cast<void*>(OnFrameHookStub)
     );
     CL_KeyEvent = Hooking::Hook::Detour(
@@ -148,5 +298,37 @@ void Console_InstallHooks()
         CL_KeyEventHook, 
         12
     );
+
+    // The original function location
+    /*CL_CharEventLoc = Findpattern(
+        Pattern::Textsegment,
+        "83 FA 60 0F 84 ? ? ? ? 48 89 74 24 ? 57 48 83 EC 20 8B FA 48 63 F1 83 FA 7E 74 79 8B 05 ? ? ? ? A8 01 75 6F A8 20 74 3F"
+    );
+
+    // Will be used as trampoline
+    auto CL_CharEventTrampolineLoc = Findpattern(
+        Pattern::Textsegment,
+        "CC CC CC CC CC CC CC CC CC CC CC CC CC"
+    );
+    CL_CharEventTrampolineLoc++;
+
+    // The call to be patched
+    auto CL_CharEventHookLoc = Findpattern(
+        Pattern::Textsegment,
+        "49 C1 E8 20 48 C1 EA 20 33 C9 45 8B C8 44 8B C3 E8 ? ? ? ? EB B3 8B 54 24 2C 33 C9 E8 ? ? ? ? EB A6"
+    );
+    CL_CharEventHookLoc += 29;
+
+    // Set the jump back address for the stub
+    CL_CharEventHook_JumpBack = CL_CharEventHookLoc + 5;
+
+    // Redirect call to our trampoline
+    Hooking::Hook::Set<std::uint8_t>(CL_CharEventHookLoc, 0xEB);
+    Hooking::Hook::Set<std::uint32_t>(CL_CharEventHookLoc + 1, static_cast<std::uint32_t>(CL_CharEventTrampolineLoc - CL_CharEventHookLoc - 5));
+
+    // Redirect our trampoline to our stub
+    Hooking::Hook::Jump(CL_CharEventTrampolineLoc, CL_CharEventHookStub);
+
+    printf("%llX\n", CL_CharEventTrampolineLoc);*/
 }
  

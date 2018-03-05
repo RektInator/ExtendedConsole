@@ -29,6 +29,20 @@ OnFrameHookStub ENDP
 
 
 
+; Hook variables
+EXTERN CL_CharEventHook_JumpBack:qword
+EXTERN CL_CharEventHook:PROC
+
+; CL_CharEventHook stub
+PUBLIC CL_CharEventHookStub
+CL_CharEventHookStub PROC
+
+	call CL_CharEventHook;
+    jmp CL_CharEventHook_JumpBack;
+
+CL_CharEventHookStub ENDP
+
+
 
 _TEXT ENDS
 END
