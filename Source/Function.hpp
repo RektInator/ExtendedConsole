@@ -32,6 +32,11 @@ public:
 		return *this;
 	}
 
+    operator bool()
+    {
+        return func.operator bool();
+    }
+
 	template <typename ...Args> result_type operator()(Args&& ...args)
 	{
 		return func(args...);

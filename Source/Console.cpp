@@ -42,8 +42,7 @@ struct dvar_t
 
 static Function<dvar_t*(const char*)> Dvar_FindVar;
 
-auto dvarCount =    reinterpret_cast<std::size_t*>(0x14B304A30);
-auto sortedDvars =  reinterpret_cast<dvar_t**>(0x14B304A50);
+dvar_t** sortedDvars; // =  reinterpret_cast<dvar_t**>(0x14B304A50);
 
 void Console_DrawInputBox()
 {
@@ -164,35 +163,34 @@ void Console_ToggleConsole()
     }
 }
 
-extern "C"
+void Console_OnFrame()
 {
-    // TODO: Base those on a pattern!
-    std::uint64_t OnFrameHook_JumpBack_Jz =	0x140213B48;
-    std::uint64_t OnFrameHook_JumpBack =	0x140213B3A;
-    std::uint64_t OnFrameHook_Func =		0x1402138C0;
-    std::uint64_t OnFrameHook_CmpAddr =		0x141CDBB28;
-
-    void Console_OnFrame()
+    if (Key_IsCatcherActive(0, 1))
     {
-        if (Key_IsCatcherActive(0, 1))
-        {
-            Console_DrawInputBox();
+        Console_DrawInputBox();
 
-            if (!console_input.empty())
+        if (!console_input.empty())
+        {
+            std::size_t index;
+            if ((index = console_input.find_first_of(' ')) != std::string::npos && index > 0)
             {
-                std::size_t index;
-                if ((index = console_input.find_first_of(' ')) != std::string::npos && index > 0)
-                {
-                    Console_DrawInfo(console_input.substr(0, index));
-                }
-                else
-                {
-                    Console_DrawSuggestions();
-                }
+                Console_DrawInfo(console_input.substr(0, index));
+            }
+            else
+            {
+                Console_DrawSuggestions();
             }
         }
     }
-    void OnFrameHookStub();
+}
+
+static std::function<std::uint8_t(std::uint32_t a1, std::uint32_t a2)> SCR_DrawScreenField;
+std::uint8_t SCR_DrawScreenFieldHook(std::uint32_t a1, std::uint32_t a2)
+{
+    auto value = SCR_DrawScreenField(a1, a2);
+    Console_OnFrame();
+
+    return value;
 }
 
 static std::function<void(std::uint64_t a1, std::uint32_t key, std::uint32_t down, std::uint32_t a4)> CL_KeyEvent;
@@ -271,19 +269,6 @@ void CL_KeyEventHook(std::uint64_t a1, std::uint32_t key, std::uint32_t down, st
     return CL_KeyEvent(a1, key, down, a4);
 }
 
-extern "C"
-{
-    std::uint64_t CL_CharEventLoc;
-    std::uint64_t CL_CharEventHook_JumpBack;
-
-    void CL_CharEventHook(std::uint32_t a1, std::uint32_t key)
-    {
-        static Function<void(std::uint32_t, std::uint32_t)> CL_CharEvent(CL_CharEventLoc);
-        return CL_CharEvent(a1, key);
-    }
-    void CL_CharEventHookStub();
-}
-
 void Console_InstallHooks() 
 { 
     // Function pattenrs (tested on Advanced Warfare)
@@ -336,10 +321,22 @@ void Console_InstallHooks()
         "48 89 5C 24 ? 57 48 83 EC 20 48 8B F9 F0 FF 05 ? ? ? ? 8B 05 ? ? ? ? 85 C0 74 13 66 90 33 C9 E8 ? ? ? ? 8B 05 ? ? ? ? 85 C0 75 EF"
     );
 
+    // Dvar list
+    auto DvarFuncPattern = Findpattern(
+        Pattern::Textsegment,
+        "33 DB 39 1D ? ? ? ? 7E 2C 48 89 7C 24 ? 48 8D 3D ? ? ? ? 0F 1F 44 00 ? 48 8B 0F 48 8B D6 FF D5 FF C3 48 8D 7F 08 3B 1D ? ? ? ? 7C EA 48 8B 7C 24 ?"
+    );
+    DvarFuncPattern += 16;
+    sortedDvars = reinterpret_cast<dvar_t**>(DvarFuncPattern + *reinterpret_cast<std::uint32_t*>(DvarFuncPattern + 2) + 6);
+
     // Hooks
-    OnFrameHook.Installhook(
-        reinterpret_cast<void*>(0x140213B2C),           // CHANGE TO PATTERN
-        reinterpret_cast<void*>(OnFrameHookStub)
+    SCR_DrawScreenField = Hooking::Hook::Detour(
+        Findpattern(
+            Pattern::Textsegment,
+            "48 89 5C 24 ? 56 48 83 EC 20 8B F2 8B D9 E8 ? ? ? ? E8 ? ? ? ? E8 ? ? ? ? 83 3D ? ? ? ? ? 75 20 45 33 C9 0F 57 D2 48 8D 15 ? ? ? ? 41 8D 49 04 48 8B 5C 24 ? 48 83 C4 20 5E E9 ? ? ? ?"
+        ),
+        SCR_DrawScreenFieldHook,
+        12
     );
     CL_KeyEvent = Hooking::Hook::Detour(
         Findpattern(
@@ -349,37 +346,5 @@ void Console_InstallHooks()
         CL_KeyEventHook, 
         12
     );
-
-    // The original function location
-    /*CL_CharEventLoc = Findpattern(
-        Pattern::Textsegment,
-        "83 FA 60 0F 84 ? ? ? ? 48 89 74 24 ? 57 48 83 EC 20 8B FA 48 63 F1 83 FA 7E 74 79 8B 05 ? ? ? ? A8 01 75 6F A8 20 74 3F"
-    );
-
-    // Will be used as trampoline
-    auto CL_CharEventTrampolineLoc = Findpattern(
-        Pattern::Textsegment,
-        "CC CC CC CC CC CC CC CC CC CC CC CC CC"
-    );
-    CL_CharEventTrampolineLoc++;
-
-    // The call to be patched
-    auto CL_CharEventHookLoc = Findpattern(
-        Pattern::Textsegment,
-        "49 C1 E8 20 48 C1 EA 20 33 C9 45 8B C8 44 8B C3 E8 ? ? ? ? EB B3 8B 54 24 2C 33 C9 E8 ? ? ? ? EB A6"
-    );
-    CL_CharEventHookLoc += 29;
-
-    // Set the jump back address for the stub
-    CL_CharEventHook_JumpBack = CL_CharEventHookLoc + 5;
-
-    // Redirect call to our trampoline
-    Hooking::Hook::Set<std::uint8_t>(CL_CharEventHookLoc, 0xEB);
-    Hooking::Hook::Set<std::uint32_t>(CL_CharEventHookLoc + 1, static_cast<std::uint32_t>(CL_CharEventTrampolineLoc - CL_CharEventHookLoc - 5));
-
-    // Redirect our trampoline to our stub
-    Hooking::Hook::Jump(CL_CharEventTrampolineLoc, CL_CharEventHookStub);
-
-    printf("%llX\n", CL_CharEventTrampolineLoc);*/
 }
  
